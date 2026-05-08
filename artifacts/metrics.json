@@ -1,0 +1,8 @@
+{
+  "mode": "forecast",
+  "accuracy": 0.6996336996336996,
+  "precision_flood": 0.53,
+  "recall_flood": 0.6022727272727273,
+  "f1_flood": 0.5638297872340425,
+  "roc_auc": 0.7466216216216217
+}
