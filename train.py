@@ -186,9 +186,9 @@ def train(df: pd.DataFrame):
     spw = (y_train == 0).sum() / (y_train == 1).sum()
 
     model = XGBClassifier(
-        n_estimators=300,
-        max_depth=5,
-        learning_rate=0.05,
+        n_estimators=600,        # more trees (was 300) — better convergence
+        max_depth=3,             # shallower trees (was 5) — reduces overfitting
+        learning_rate=0.1,       # higher rate (was 0.05) — paired with more trees
         subsample=0.85,
         colsample_bytree=0.85,
         scale_pos_weight=spw,
@@ -246,8 +246,71 @@ def shap_summary(model, X_test):
 
 
 # ---------------------------------------------------------------------------
-# MAIN
+# BONUS TASKS — added to train pipeline between cleaning and feature engineering
 # ---------------------------------------------------------------------------
+
+# === BONUS CARD 1: MONSOON SURGE ===
+# A 300% rainfall spike has been recorded in 2 districts. Add these as new rows
+# to the training data. Choice: KP_District (Buner Aug 2025 cloudburst) and
+# Sindh_District (Dadu 2022 floods) — both real flood events.
+SURGE_DISTRICTS = ["KP_District", "Sindh_District"]
+
+def add_monsoon_surge(df: pd.DataFrame) -> pd.DataFrame:
+    """Inject 300% rainfall spike rows for two affected districts.
+    Mirrors a real-world surge — values 4x historical max, soil saturated,
+    flood_event=1 since extreme rain on saturated soil triggers floods.
+    """
+    surge_rows = []
+    for district in SURGE_DISTRICTS:
+        # Sample real flood rows from this district as templates
+        flood_rows = df[(df["district"] == district) & (df["flood_event"] == 1)]
+        if len(flood_rows) < 3:
+            continue
+        sample = flood_rows.sample(n=3, random_state=42).copy().reset_index(drop=True)
+        # 300% spike = 4x baseline. Scale precipitation and rolling avgs proportionally.
+        sample["precipitation"] = sample["precipitation"] * 4
+        sample["precip_3day_avg"] = sample["precip_3day_avg"] * 4
+        sample["precip_7day_avg"] = sample["precip_7day_avg"] * 4
+        sample["soil_moisture"] = 0.85  # saturated by spike
+        sample["flood_event"] = 1
+        surge_rows.append(sample)
+        print(f"  +3 surge rows for {district} (300% rainfall spike)")
+    if surge_rows:
+        df = pd.concat([df] + surge_rows, ignore_index=True)
+    return df
+
+
+# === BONUS CARD 2: SENSOR WENT ROGUE — PROXIMITY-BASED IMPUTATION ===
+# Balochistan_District's rainfall sensor flagged faulty. We cannot drop the district
+# (high-population). Impute using the average of its two nearest neighbours by
+# province proximity: Sindh_District (south) and KP_District (north).
+FAULTY_DISTRICT = "Balochistan_District"
+NEAREST_NEIGHBOURS = ["Sindh_District", "KP_District"]
+
+def proximity_impute_rainfall(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace the faulty sensor's rainfall with the same-date mean from
+    its two nearest geographical neighbours. NOT a column-wide mean — proximity-
+    based logic per the bonus card spec.
+    Operates on the most recent 30 days (the 'current cycle').
+    """
+    df = df.sort_values("date").copy()
+    cutoff = df["date"].max() - pd.Timedelta(days=30)
+    target_mask = (df["district"] == FAULTY_DISTRICT) & (df["date"] >= cutoff)
+    n_imputed = 0
+    for idx in df[target_mask].index:
+        row_date = df.at[idx, "date"]
+        neighbours = df[(df["district"].isin(NEAREST_NEIGHBOURS)) &
+                        (df["date"] == row_date)]
+        if len(neighbours) > 0:
+            df.at[idx, "precipitation"] = neighbours["precipitation"].mean()
+            n_imputed += 1
+    print(f"  Imputed {n_imputed} {FAULTY_DISTRICT} rainfall values "
+          f"(mean of {' + '.join(NEAREST_NEIGHBOURS)})")
+    return df
+
+
+# ---------------------------------------------------------------------------
+
 def main():
     print("Loading...")
     df = load_data()
@@ -256,6 +319,14 @@ def main():
     print("Cleaning...")
     df = clean_data(df)
     print(f"  Clean shape: {df.shape}")
+
+    print("Bonus Card 1 — adding monsoon surge rows...")
+    df = add_monsoon_surge(df)
+    print(f"  Shape after surge: {df.shape}")
+
+    print("Bonus Card 2 — proximity-imputing faulty sensor...")
+    df = proximity_impute_rainfall(df)
+    print(f"  Shape after imputation: {df.shape}")
 
     print("Engineering features...")
     df = engineer_features(df)
